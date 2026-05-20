@@ -1,11 +1,24 @@
-import { Editor, MarkdownView, Notice, Plugin, TFile } from "obsidian";
+import { App, Editor, MarkdownView, Notice, Plugin, PluginSettingTab, Setting, TFile } from "obsidian";
 
 const PLUGIN_NAME = "Daily Checkbox Focus";
-const PLUGIN_VERSION = "1.0.0";
+const PLUGIN_VERSION = "1.1.0";
 const AUTO_JUMP_DELAYS_MS = [150, 400, 900, 1600];
 const EMPTY_CHECKBOX_RE = /^\s*[-*+]\s+\[[ \t]\][ \t]*$/;
 const FENCE_RE = /^\s{0,3}(```+|~~~+)/;
 const BLOCKQUOTE_RE = /^\s*>/;
+const HEADING_RE = /^\s{0,3}#{1,6}(?:\s|$)/;
+const FRONTMATTER_OPEN_RE = /^---\s*$/;
+const FRONTMATTER_CLOSE_RE = /^(---|\.\.\.)\s*$/;
+
+interface DailyCheckboxFocusSettings {
+  createMissingTopCheckbox: boolean;
+  focusOnOpen: boolean;
+}
+
+const DEFAULT_SETTINGS: DailyCheckboxFocusSettings = {
+  createMissingTopCheckbox: true,
+  focusOnOpen: true,
+};
 
 interface FenceState {
   type: string;
@@ -15,6 +28,21 @@ interface FenceState {
 interface CheckboxTarget {
   line: number;
   ch: number;
+}
+
+interface TopCaptureArea {
+  startLine: number;
+  endLine: number;
+}
+
+interface SearchableLine {
+  line: number;
+  text: string;
+}
+
+interface FocusResult {
+  target: CheckboxTarget;
+  created: boolean;
 }
 
 interface JumpOptions {
@@ -28,13 +56,18 @@ interface EditorChangeInfo {
 }
 
 export default class DailyCheckboxFocusPlugin extends Plugin {
+  settings: DailyCheckboxFocusSettings = { ...DEFAULT_SETTINGS };
   private currentSessionId = 0;
   private currentSessionFilePath: string | null = null;
   private autoJumpDoneForSession = false;
   private userEditedSinceOpen = false;
   private pendingTimers: number[] = [];
+  private suppressEditorChangeForFilePath: string | null = null;
 
   async onload(): Promise<void> {
+    await this.loadSettings();
+    this.addSettingTab(new DailyCheckboxFocusSettingTab(this.app, this));
+
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
         this.startOpenSession(file?.path ?? null);
@@ -94,6 +127,10 @@ export default class DailyCheckboxFocusPlugin extends Plugin {
     const sessionId = this.currentSessionId;
     const filePath = this.currentSessionFilePath;
 
+    if (!this.settings.focusOnOpen) {
+      return;
+    }
+
     if (!filePath || !this.isDailyFilePath(filePath)) {
       return;
     }
@@ -109,6 +146,7 @@ export default class DailyCheckboxFocusPlugin extends Plugin {
   }
 
   private attemptAutoJump(sessionId: number, filePath: string): boolean {
+    if (!this.settings.focusOnOpen) return false;
     if (sessionId !== this.currentSessionId) return false;
     if (filePath !== this.currentSessionFilePath) return false;
     if (this.getActiveFilePath() !== filePath) return false;
@@ -130,6 +168,10 @@ export default class DailyCheckboxFocusPlugin extends Plugin {
     const changedPath = this.getPathFromEditorInfo(info) || this.getActiveFilePath();
 
     if (!changedPath || changedPath !== this.currentSessionFilePath) {
+      return;
+    }
+
+    if (changedPath === this.suppressEditorChangeForFilePath) {
       return;
     }
 
@@ -182,12 +224,14 @@ export default class DailyCheckboxFocusPlugin extends Plugin {
       return false;
     }
 
-    const target = this.findFirstEmptyCheckbox(view.editor);
+    const result = this.focusOrCreateTopCheckbox(view.editor, view.file.path);
 
-    if (!target) {
-      if (showNotice) new Notice(`${PLUGIN_NAME}: empty checkbox not found`);
+    if (!result) {
+      if (showNotice) new Notice(`${PLUGIN_NAME}: top capture checkbox not found`);
       return false;
     }
+
+    const target = result.target;
 
     view.editor.focus();
     view.editor.setCursor({ line: target.line, ch: target.ch });
@@ -200,33 +244,111 @@ export default class DailyCheckboxFocusPlugin extends Plugin {
     );
 
     if (showNotice) {
-      new Notice(`${PLUGIN_NAME}: jumped to line ${target.line + 1}, ch ${target.ch}`);
+      const action = result.created ? "created and focused" : "jumped to";
+      new Notice(`${PLUGIN_NAME}: ${action} line ${target.line + 1}, ch ${target.ch}`);
     }
 
     return true;
   }
 
-  private findFirstEmptyCheckbox(editor: Editor): CheckboxTarget | null {
-    let fence: FenceState | null = null;
+  private focusOrCreateTopCheckbox(editor: Editor, filePath: string): FocusResult | null {
+    const area = this.getTopCaptureArea(editor);
+    const existingTarget = this.findFirstEmptyCheckboxInTopCaptureArea(editor, area);
 
-    for (let line = 0; line < editor.lineCount(); line += 1) {
-      const text = editor.getLine(line);
-      const fenceMatch = text.match(FENCE_RE);
+    if (existingTarget) {
+      return { target: existingTarget, created: false };
+    }
 
-      if (fenceMatch) {
-        fence = this.nextFenceState(fence, fenceMatch[1]);
-        continue;
+    if (!this.settings.createMissingTopCheckbox) {
+      return null;
+    }
+
+    const createdTarget = this.insertTopCaptureCheckbox(editor, area, filePath);
+    return { target: createdTarget, created: true };
+  }
+
+  private getTopCaptureArea(editor: Editor): TopCaptureArea {
+    const startLine = this.getTopCaptureStartLine(editor);
+    const endLine = this.getFirstMarkdownHeadingLine(editor, startLine) ?? editor.lineCount();
+    return { startLine, endLine };
+  }
+
+  private getTopCaptureStartLine(editor: Editor): number {
+    if (editor.lineCount() === 0) {
+      return 0;
+    }
+
+    if (!FRONTMATTER_OPEN_RE.test(editor.getLine(0))) {
+      return 0;
+    }
+
+    for (let line = 1; line < editor.lineCount(); line += 1) {
+      if (FRONTMATTER_CLOSE_RE.test(editor.getLine(line))) {
+        return line + 1;
       }
+    }
 
-      if (fence) continue;
-      if (BLOCKQUOTE_RE.test(text)) continue;
+    return 0;
+  }
 
+  private getFirstMarkdownHeadingLine(editor: Editor, startLine: number): number | null {
+    for (const { line, text } of this.iterSearchableTopLines(editor, startLine, editor.lineCount())) {
+      if (HEADING_RE.test(text)) {
+        return line;
+      }
+    }
+
+    return null;
+  }
+
+  private findFirstEmptyCheckboxInTopCaptureArea(editor: Editor, area: TopCaptureArea): CheckboxTarget | null {
+    for (const { line, text } of this.iterSearchableTopLines(editor, area.startLine, area.endLine)) {
       if (EMPTY_CHECKBOX_RE.test(text)) {
         return { line, ch: text.length };
       }
     }
 
     return null;
+  }
+
+  private insertTopCaptureCheckbox(editor: Editor, area: TopCaptureArea, filePath: string): CheckboxTarget {
+    const checkboxText = "- [ ]";
+    const hasHeading = area.endLine < editor.lineCount();
+    let insertAt = this.getDocumentEndPosition(editor);
+    let insertText = checkboxText;
+    let targetLine = insertAt.line;
+
+    if (hasHeading) {
+      insertAt = { line: area.endLine, ch: 0 };
+      targetLine = area.endLine;
+
+      if (area.endLine > area.startLine && editor.getLine(area.endLine - 1).trim() === "") {
+        insertAt = { line: area.endLine - 1, ch: 0 };
+        targetLine = area.endLine - 1;
+        insertText = `${checkboxText}\n`;
+      } else {
+        insertText = `${checkboxText}\n\n`;
+      }
+    } else {
+      const lastLineText = editor.getLine(insertAt.line);
+      insertText = lastLineText.length === 0 ? checkboxText : `\n${checkboxText}`;
+      targetLine = lastLineText.length === 0 ? insertAt.line : insertAt.line + 1;
+    }
+
+    this.suppressEditorChangeForFilePath = filePath;
+    editor.replaceRange(insertText, insertAt);
+    window.setTimeout(() => {
+      if (this.suppressEditorChangeForFilePath === filePath) {
+        this.suppressEditorChangeForFilePath = null;
+      }
+    }, 0);
+
+    return { line: targetLine, ch: checkboxText.length };
+  }
+
+  private getDocumentEndPosition(editor: Editor): CheckboxTarget {
+    const line = Math.max(0, editor.lineCount() - 1);
+    return { line, ch: editor.getLine(line).length };
   }
 
   private nextFenceState(currentFence: FenceState | null, marker: string): FenceState | null {
@@ -251,18 +373,23 @@ export default class DailyCheckboxFocusPlugin extends Plugin {
       return;
     }
 
-    const target = this.findFirstEmptyCheckbox(view.editor);
-    const firstCheckboxLines = this.getFirstCheckboxLines(view.editor, 60);
+    const area = this.getTopCaptureArea(view.editor);
+    const target = this.findFirstEmptyCheckboxInTopCaptureArea(view.editor, area);
+    const firstCheckboxLines = this.getFirstCheckboxLinesInTopCaptureArea(view.editor, area);
     const dailyFileMatch = this.isDailyFilePath(view.file.path);
+    const wouldCreate = !target && this.settings.createMissingTopCheckbox;
     const message = [
       `${PLUGIN_NAME} v${PLUGIN_VERSION}`,
       `file: ${view.file.path}`,
       `daily file match: ${dailyFileMatch ? "yes" : "no"}`,
+      `top capture area start/end lines: ${this.formatTopCaptureArea(area)}`,
+      `empty checkbox found: ${target ? "yes" : "no"}`,
+      `target: ${target ? `line ${target.line + 1}, ch ${target.ch}` : "not found"}`,
+      `would create checkbox: ${wouldCreate ? "yes" : "no"}`,
       `open session id: ${this.currentSessionId}`,
       `auto-jump already happened: ${this.autoJumpDoneForSession ? "yes" : "no"}`,
       `user edit detected after open: ${this.userEditedSinceOpen ? "yes" : "no"}`,
-      `target: ${target ? `line ${target.line + 1}, ch ${target.ch}` : "not found"}`,
-      `first [ ] lines within first 60: ${firstCheckboxLines.length ? firstCheckboxLines.join(" | ") : "none"}`,
+      `first [ ] lines in top capture area: ${firstCheckboxLines.length ? firstCheckboxLines.join(" | ") : "none"}`,
     ].join("\n");
 
     new Notice(message, 12000);
@@ -270,26 +397,95 @@ export default class DailyCheckboxFocusPlugin extends Plugin {
       version: PLUGIN_VERSION,
       currentFilePath: view.file.path,
       dailyFileMatch,
+      topCaptureArea: area,
+      emptyCheckboxFound: Boolean(target),
+      target: target ?? null,
+      wouldCreateCheckboxWithCurrentSettings: wouldCreate,
       currentSessionId: this.currentSessionId,
       autoJumpDoneForSession: this.autoJumpDoneForSession,
       userEditedSinceOpen: this.userEditedSinceOpen,
-      target,
-      firstLinesContainingCheckboxWithinFirst60: firstCheckboxLines,
+      firstLinesContainingCheckboxInTopCaptureArea: firstCheckboxLines,
     });
   }
 
-  private getFirstCheckboxLines(editor: Editor, limit: number): string[] {
+  private getFirstCheckboxLinesInTopCaptureArea(editor: Editor, area: TopCaptureArea): string[] {
     const lines: string[] = [];
-    const maxLine = Math.min(editor.lineCount(), limit);
 
-    for (let line = 0; line < maxLine; line += 1) {
-      const text = editor.getLine(line);
-
+    for (const { line, text } of this.iterSearchableTopLines(editor, area.startLine, area.endLine)) {
       if (text.includes("[ ]")) {
         lines.push(`${line + 1}: ${JSON.stringify(text)}`);
       }
     }
 
     return lines;
+  }
+
+  private *iterSearchableTopLines(editor: Editor, startLine: number, endLine: number): Generator<SearchableLine> {
+    let fence: FenceState | null = null;
+
+    for (let line = startLine; line < endLine; line += 1) {
+      const text = editor.getLine(line);
+      const fenceMatch = text.match(FENCE_RE);
+
+      if (fenceMatch) {
+        fence = this.nextFenceState(fence, fenceMatch[1]);
+        continue;
+      }
+
+      if (fence) continue;
+      if (BLOCKQUOTE_RE.test(text)) continue;
+
+      yield { line, text };
+    }
+  }
+
+  private formatTopCaptureArea(area: TopCaptureArea): string {
+    if (area.startLine >= area.endLine) {
+      return `empty, start ${area.startLine + 1}, end before ${area.endLine + 1}`;
+    }
+
+    return `${area.startLine + 1}-${area.endLine}`;
+  }
+
+  async loadSettings(): Promise<void> {
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+  }
+
+  async saveSettings(): Promise<void> {
+    await this.saveData(this.settings);
+  }
+}
+
+class DailyCheckboxFocusSettingTab extends PluginSettingTab {
+  plugin: DailyCheckboxFocusPlugin;
+
+  constructor(app: App, plugin: DailyCheckboxFocusPlugin) {
+    super(app, plugin);
+    this.plugin = plugin;
+  }
+
+  display(): void {
+    const { containerEl } = this;
+    containerEl.empty();
+
+    new Setting(containerEl)
+      .setName("Create missing top checkbox")
+      .setDesc("If no empty checkbox exists before the first heading, insert one in the top capture area.")
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.createMissingTopCheckbox).onChange(async (value) => {
+          this.plugin.settings.createMissingTopCheckbox = value;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Focus on open")
+      .setDesc("Automatically focus the top capture checkbox when opening daily notes.")
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.focusOnOpen).onChange(async (value) => {
+          this.plugin.settings.focusOnOpen = value;
+          await this.plugin.saveSettings();
+        })
+      );
   }
 }

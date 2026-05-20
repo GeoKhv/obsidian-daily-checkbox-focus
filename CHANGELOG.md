@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.1.0
+
+### Added
+
+- The plugin can now maintain a top capture checkbox by inserting one before the first heading when none exists.
+
+### Fixed
+
+- Focus is now limited to the top capture area before the first heading and no longer jumps into later sections.
+
 ## 1.0.0
 
 - Initial public release.

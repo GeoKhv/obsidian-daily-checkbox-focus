@@ -39,7 +39,7 @@ jobs:
           test -f manifest.json
           test "${GITHUB_REF_NAME}" = "$(node -p "require('./manifest.json').version")"
           grep -q '"id": "daily-checkbox-focus"' manifest.json
-          grep -q '"version": "1.0.0"' manifest.json
+          grep -q "\"version\": \"${GITHUB_REF_NAME}\"" manifest.json
 
       - name: Collect release assets
         shell: bash
