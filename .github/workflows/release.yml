@@ -1,0 +1,43 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f main.js
+          test -f manifest.json
+          test "${GITHUB_REF_NAME}" = "1.0.0"
+          grep -q '"id": "daily-checkbox-focus"' manifest.json
+          grep -q '"version": "1.0.0"' manifest.json
+
+      - name: Collect release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir release-assets
+          cp main.js manifest.json release-assets/
+          if [ -f styles.css ]; then
+            cp styles.css release-assets/
+          fi
+
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: release-assets/*

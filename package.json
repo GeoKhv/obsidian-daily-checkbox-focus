@@ -1,0 +1,19 @@
+{
+  "name": "obsidian-daily-checkbox-focus",
+  "version": "1.0.0",
+  "private": false,
+  "description": "Focus the first empty checkbox when opening daily notes.",
+  "main": "main.js",
+  "scripts": {
+    "check": "node --check main.js"
+  },
+  "keywords": [
+    "obsidian",
+    "obsidian-plugin",
+    "daily-notes",
+    "checkbox"
+  ],
+  "author": "Geo",
+  "license": "MIT",
+  "devDependencies": {}
+}
