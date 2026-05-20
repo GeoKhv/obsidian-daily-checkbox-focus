@@ -5,7 +5,8 @@
   "description": "Focus the first empty checkbox when opening daily notes.",
   "main": "main.js",
   "scripts": {
-    "check": "node --check main.js"
+    "build": "node esbuild.config.mjs --production",
+    "check": "tsc --noEmit"
   },
   "keywords": [
     "obsidian",
@@ -15,5 +16,9 @@
   ],
   "author": "Geo",
   "license": "MIT",
-  "devDependencies": {}
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "obsidian": "^1.8.7",
+    "typescript": "^5.8.3"
+  }
 }

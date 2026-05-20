@@ -1,4 +1,4 @@
-const { Plugin, MarkdownView, Notice } = require("obsidian");
+import { Editor, MarkdownView, Notice, Plugin, TFile } from "obsidian";
 
 const PLUGIN_NAME = "Daily Checkbox Focus";
 const PLUGIN_VERSION = "1.0.0";
@@ -7,19 +7,37 @@ const EMPTY_CHECKBOX_RE = /^\s*[-*+]\s+\[[ \t]\][ \t]*$/;
 const FENCE_RE = /^\s{0,3}(```+|~~~+)/;
 const BLOCKQUOTE_RE = /^\s*>/;
 
-module.exports = class DailyCheckboxFocusPlugin extends Plugin {
-  async onload() {
-    this.currentSessionId = 0;
-    this.currentSessionFilePath = null;
-    this.autoJumpDoneForSession = false;
-    this.userEditedSinceOpen = false;
-    this.pendingTimers = [];
+interface FenceState {
+  type: string;
+  length: number;
+}
 
-    console.log(`[${PLUGIN_NAME}] loaded v${PLUGIN_VERSION}`);
+interface CheckboxTarget {
+  line: number;
+  ch: number;
+}
 
+interface JumpOptions {
+  manual: boolean;
+  showNotice: boolean;
+}
+
+interface EditorChangeInfo {
+  file?: TFile | null;
+  view?: MarkdownView | null;
+}
+
+export default class DailyCheckboxFocusPlugin extends Plugin {
+  private currentSessionId = 0;
+  private currentSessionFilePath: string | null = null;
+  private autoJumpDoneForSession = false;
+  private userEditedSinceOpen = false;
+  private pendingTimers: number[] = [];
+
+  async onload(): Promise<void> {
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
-        this.startOpenSession(file && file.path ? file.path : null);
+        this.startOpenSession(file?.path ?? null);
       })
     );
 
@@ -31,7 +49,7 @@ module.exports = class DailyCheckboxFocusPlugin extends Plugin {
 
     this.registerEvent(
       this.app.workspace.on("editor-change", (_editor, info) => {
-        this.handleEditorChange(info);
+        this.handleEditorChange(info as EditorChangeInfo | undefined);
       })
     );
 
@@ -52,11 +70,11 @@ module.exports = class DailyCheckboxFocusPlugin extends Plugin {
     });
   }
 
-  onunload() {
+  onunload(): void {
     this.clearPendingTimers();
   }
 
-  startOpenSession(fallbackFilePath) {
+  private startOpenSession(fallbackFilePath: string | null): void {
     const nextFilePath = fallbackFilePath || this.getActiveFilePath() || null;
 
     // Obsidian can emit several open/leaf events for the same file; keep one session.
@@ -72,7 +90,7 @@ module.exports = class DailyCheckboxFocusPlugin extends Plugin {
     this.scheduleAutoJumpForCurrentFile();
   }
 
-  scheduleAutoJumpForCurrentFile() {
+  private scheduleAutoJumpForCurrentFile(): void {
     const sessionId = this.currentSessionId;
     const filePath = this.currentSessionFilePath;
 
@@ -90,7 +108,7 @@ module.exports = class DailyCheckboxFocusPlugin extends Plugin {
     }
   }
 
-  attemptAutoJump(sessionId, filePath) {
+  private attemptAutoJump(sessionId: number, filePath: string): boolean {
     if (sessionId !== this.currentSessionId) return false;
     if (filePath !== this.currentSessionFilePath) return false;
     if (this.getActiveFilePath() !== filePath) return false;
@@ -108,7 +126,7 @@ module.exports = class DailyCheckboxFocusPlugin extends Plugin {
     return jumped;
   }
 
-  handleEditorChange(info) {
+  private handleEditorChange(info: EditorChangeInfo | undefined): void {
     const changedPath = this.getPathFromEditorInfo(info) || this.getActiveFilePath();
 
     if (!changedPath || changedPath !== this.currentSessionFilePath) {
@@ -119,12 +137,7 @@ module.exports = class DailyCheckboxFocusPlugin extends Plugin {
     this.clearPendingTimers();
   }
 
-  clearPendingTimers() {
-    if (!this.pendingTimers) {
-      this.pendingTimers = [];
-      return;
-    }
-
+  private clearPendingTimers(): void {
     for (const timerId of this.pendingTimers) {
       window.clearTimeout(timerId);
     }
@@ -132,35 +145,35 @@ module.exports = class DailyCheckboxFocusPlugin extends Plugin {
     this.pendingTimers = [];
   }
 
-  removePendingTimer(timerId) {
-    this.pendingTimers = (this.pendingTimers || []).filter((pendingTimerId) => pendingTimerId !== timerId);
+  private removePendingTimer(timerId: number): void {
+    this.pendingTimers = this.pendingTimers.filter((pendingTimerId) => pendingTimerId !== timerId);
   }
 
-  getActiveMarkdownView() {
+  private getActiveMarkdownView(): MarkdownView | null {
     return this.app.workspace.getActiveViewOfType(MarkdownView);
   }
 
-  getActiveFilePath() {
+  private getActiveFilePath(): string | null {
     const view = this.getActiveMarkdownView();
-    return view && view.file && view.file.path ? view.file.path : null;
+    return view?.file?.path ?? null;
   }
 
-  getPathFromEditorInfo(info) {
+  private getPathFromEditorInfo(info: EditorChangeInfo | undefined): string | null {
     if (!info) return null;
-    if (info.file && info.file.path) return info.file.path;
-    if (info.view && info.view.file && info.view.file.path) return info.view.file.path;
+    if (info.file?.path) return info.file.path;
+    if (info.view?.file?.path) return info.view.file.path;
     return null;
   }
 
-  isDailyFilePath(filePath) {
+  private isDailyFilePath(filePath: string): boolean {
     const fileName = filePath.split("/").pop();
-    return /^\d{4}-\d{2}-\d{2}\.md$/.test(fileName);
+    return /^\d{4}-\d{2}-\d{2}\.md$/.test(fileName ?? "");
   }
 
-  jumpToFirstEmptyCheckbox({ manual, showNotice }) {
+  private jumpToFirstEmptyCheckbox({ manual, showNotice }: JumpOptions): boolean {
     const view = this.getActiveMarkdownView();
 
-    if (!view || !view.file || !view.editor) {
+    if (!view?.file || !view.editor) {
       if (showNotice) new Notice(`${PLUGIN_NAME}: no active markdown editor`);
       return false;
     }
@@ -193,8 +206,8 @@ module.exports = class DailyCheckboxFocusPlugin extends Plugin {
     return true;
   }
 
-  findFirstEmptyCheckbox(editor) {
-    let fence = null;
+  private findFirstEmptyCheckbox(editor: Editor): CheckboxTarget | null {
+    let fence: FenceState | null = null;
 
     for (let line = 0; line < editor.lineCount(); line += 1) {
       const text = editor.getLine(line);
@@ -216,7 +229,7 @@ module.exports = class DailyCheckboxFocusPlugin extends Plugin {
     return null;
   }
 
-  nextFenceState(currentFence, marker) {
+  private nextFenceState(currentFence: FenceState | null, marker: string): FenceState | null {
     const type = marker.charAt(0);
 
     if (!currentFence) {
@@ -230,10 +243,10 @@ module.exports = class DailyCheckboxFocusPlugin extends Plugin {
     return currentFence;
   }
 
-  debugFirstEmptyCheckbox() {
+  private debugFirstEmptyCheckbox(): void {
     const view = this.getActiveMarkdownView();
 
-    if (!view || !view.file || !view.editor) {
+    if (!view?.file || !view.editor) {
       new Notice(`${PLUGIN_NAME}: no active markdown editor`, 10000);
       return;
     }
@@ -265,8 +278,8 @@ module.exports = class DailyCheckboxFocusPlugin extends Plugin {
     });
   }
 
-  getFirstCheckboxLines(editor, limit) {
-    const lines = [];
+  private getFirstCheckboxLines(editor: Editor, limit: number): string[] {
+    const lines: string[] = [];
     const maxLine = Math.min(editor.lineCount(), limit);
 
     for (let line = 0; line < maxLine; line += 1) {
@@ -279,4 +292,4 @@ module.exports = class DailyCheckboxFocusPlugin extends Plugin {
 
     return lines;
   }
-};
+}

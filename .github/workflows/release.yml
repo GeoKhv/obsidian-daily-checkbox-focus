@@ -16,13 +16,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check
+        run: npm run check
+
+      - name: Build
+        run: npm run build
+
       - name: Validate release files
         shell: bash
         run: |
           set -euo pipefail
           test -f main.js
           test -f manifest.json
-          test "${GITHUB_REF_NAME}" = "1.0.0"
+          test "${GITHUB_REF_NAME}" = "$(node -p "require('./manifest.json').version")"
           grep -q '"id": "daily-checkbox-focus"' manifest.json
           grep -q '"version": "1.0.0"' manifest.json
 
@@ -36,8 +51,8 @@ jobs:
             cp styles.css release-assets/
           fi
 
-      - name: Create draft release
+      - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          draft: true
+          draft: false
           files: release-assets/*
