@@ -1,14 +1,15 @@
 import { App, Editor, MarkdownView, Notice, Plugin, PluginSettingTab, Setting, TFile } from "obsidian";
 
 const PLUGIN_NAME = "Daily Checkbox Focus";
-const PLUGIN_VERSION = "1.1.0";
+const PLUGIN_VERSION = "1.1.1";
 const AUTO_JUMP_DELAYS_MS = [150, 400, 900, 1600];
-const EMPTY_CHECKBOX_RE = /^\s*[-*+]\s+\[[ \t]\][ \t]*$/;
+const EMPTY_CHECKBOX_RE = /^(\s*[-*+]\s+\[[ \t]\])([ \t]*)$/;
 const FENCE_RE = /^\s{0,3}(```+|~~~+)/;
 const BLOCKQUOTE_RE = /^\s*>/;
 const HEADING_RE = /^\s{0,3}#{1,6}(?:\s|$)/;
 const FRONTMATTER_OPEN_RE = /^---\s*$/;
 const FRONTMATTER_CLOSE_RE = /^(---|\.\.\.)\s*$/;
+const TOP_CAPTURE_CHECKBOX_TEXT = "- [ ] ";
 
 interface DailyCheckboxFocusSettings {
   createMissingTopCheckbox: boolean;
@@ -40,9 +41,15 @@ interface SearchableLine {
   text: string;
 }
 
+interface ExistingCheckboxTarget {
+  target: CheckboxTarget;
+  needsSpacingNormalization: boolean;
+}
+
 interface FocusResult {
   target: CheckboxTarget;
   created: boolean;
+  spacingNormalized: boolean;
 }
 
 interface JumpOptions {
@@ -63,6 +70,8 @@ export default class DailyCheckboxFocusPlugin extends Plugin {
   private userEditedSinceOpen = false;
   private pendingTimers: number[] = [];
   private suppressEditorChangeForFilePath: string | null = null;
+  private lastFocusResultFilePath: string | null = null;
+  private lastFocusSpacingNormalized: boolean | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -227,11 +236,15 @@ export default class DailyCheckboxFocusPlugin extends Plugin {
     const result = this.focusOrCreateTopCheckbox(view.editor, view.file.path);
 
     if (!result) {
+      this.lastFocusResultFilePath = view.file.path;
+      this.lastFocusSpacingNormalized = null;
       if (showNotice) new Notice(`${PLUGIN_NAME}: top capture checkbox not found`);
       return false;
     }
 
     const target = result.target;
+    this.lastFocusResultFilePath = view.file.path;
+    this.lastFocusSpacingNormalized = result.spacingNormalized;
 
     view.editor.focus();
     view.editor.setCursor({ line: target.line, ch: target.ch });
@@ -256,7 +269,21 @@ export default class DailyCheckboxFocusPlugin extends Plugin {
     const existingTarget = this.findFirstEmptyCheckboxInTopCaptureArea(editor, area);
 
     if (existingTarget) {
-      return { target: existingTarget, created: false };
+      if (existingTarget.needsSpacingNormalization) {
+        this.suppressEditorChangeForFilePath = filePath;
+        editor.replaceRange(" ", { line: existingTarget.target.line, ch: existingTarget.target.ch - 1 });
+        window.setTimeout(() => {
+          if (this.suppressEditorChangeForFilePath === filePath) {
+            this.suppressEditorChangeForFilePath = null;
+          }
+        }, 0);
+      }
+
+      return {
+        target: existingTarget.target,
+        created: false,
+        spacingNormalized: existingTarget.needsSpacingNormalization,
+      };
     }
 
     if (!this.settings.createMissingTopCheckbox) {
@@ -264,7 +291,7 @@ export default class DailyCheckboxFocusPlugin extends Plugin {
     }
 
     const createdTarget = this.insertTopCaptureCheckbox(editor, area, filePath);
-    return { target: createdTarget, created: true };
+    return { target: createdTarget, created: true, spacingNormalized: false };
   }
 
   private getTopCaptureArea(editor: Editor): TopCaptureArea {
@@ -301,10 +328,17 @@ export default class DailyCheckboxFocusPlugin extends Plugin {
     return null;
   }
 
-  private findFirstEmptyCheckboxInTopCaptureArea(editor: Editor, area: TopCaptureArea): CheckboxTarget | null {
+  private findFirstEmptyCheckboxInTopCaptureArea(editor: Editor, area: TopCaptureArea): ExistingCheckboxTarget | null {
     for (const { line, text } of this.iterSearchableTopLines(editor, area.startLine, area.endLine)) {
-      if (EMPTY_CHECKBOX_RE.test(text)) {
-        return { line, ch: text.length };
+      const checkboxMatch = text.match(EMPTY_CHECKBOX_RE);
+
+      if (checkboxMatch) {
+        const marker = checkboxMatch[1];
+        const spacing = checkboxMatch[2];
+        const needsSpacingNormalization = spacing.length === 0;
+        const targetCh = needsSpacingNormalization ? marker.length + 1 : text.length;
+
+        return { target: { line, ch: targetCh }, needsSpacingNormalization };
       }
     }
 
@@ -312,7 +346,7 @@ export default class DailyCheckboxFocusPlugin extends Plugin {
   }
 
   private insertTopCaptureCheckbox(editor: Editor, area: TopCaptureArea, filePath: string): CheckboxTarget {
-    const checkboxText = "- [ ]";
+    const checkboxText = TOP_CAPTURE_CHECKBOX_TEXT;
     const hasHeading = area.endLine < editor.lineCount();
     let insertAt = this.getDocumentEndPosition(editor);
     let insertText = checkboxText;
@@ -374,10 +408,16 @@ export default class DailyCheckboxFocusPlugin extends Plugin {
     }
 
     const area = this.getTopCaptureArea(view.editor);
-    const target = this.findFirstEmptyCheckboxInTopCaptureArea(view.editor, area);
+    const result = this.findFirstEmptyCheckboxInTopCaptureArea(view.editor, area);
+    const target = result?.target ?? null;
     const firstCheckboxLines = this.getFirstCheckboxLinesInTopCaptureArea(view.editor, area);
     const dailyFileMatch = this.isDailyFilePath(view.file.path);
     const wouldCreate = !target && this.settings.createMissingTopCheckbox;
+    const wouldNormalizeSpacing = result?.needsSpacingNormalization ?? false;
+    const lastFocusSpacingNormalized =
+      this.lastFocusResultFilePath === view.file.path && this.lastFocusSpacingNormalized !== null
+        ? this.lastFocusSpacingNormalized
+        : null;
     const message = [
       `${PLUGIN_NAME} v${PLUGIN_VERSION}`,
       `file: ${view.file.path}`,
@@ -385,6 +425,8 @@ export default class DailyCheckboxFocusPlugin extends Plugin {
       `top capture area start/end lines: ${this.formatTopCaptureArea(area)}`,
       `empty checkbox found: ${target ? "yes" : "no"}`,
       `target: ${target ? `line ${target.line + 1}, ch ${target.ch}` : "not found"}`,
+      `checkbox spacing would be normalized on focus: ${wouldNormalizeSpacing ? "yes" : "no"}`,
+      `last focus normalized checkbox spacing: ${this.formatNullableYesNo(lastFocusSpacingNormalized)}`,
       `would create checkbox: ${wouldCreate ? "yes" : "no"}`,
       `open session id: ${this.currentSessionId}`,
       `auto-jump already happened: ${this.autoJumpDoneForSession ? "yes" : "no"}`,
@@ -400,6 +442,8 @@ export default class DailyCheckboxFocusPlugin extends Plugin {
       topCaptureArea: area,
       emptyCheckboxFound: Boolean(target),
       target: target ?? null,
+      checkboxSpacingWouldBeNormalizedOnFocus: wouldNormalizeSpacing,
+      lastFocusNormalizedCheckboxSpacing: lastFocusSpacingNormalized,
       wouldCreateCheckboxWithCurrentSettings: wouldCreate,
       currentSessionId: this.currentSessionId,
       autoJumpDoneForSession: this.autoJumpDoneForSession,
@@ -445,6 +489,11 @@ export default class DailyCheckboxFocusPlugin extends Plugin {
     }
 
     return `${area.startLine + 1}-${area.endLine}`;
+  }
+
+  private formatNullableYesNo(value: boolean | null): string {
+    if (value === null) return "none";
+    return value ? "yes" : "no";
   }
 
   async loadSettings(): Promise<void> {

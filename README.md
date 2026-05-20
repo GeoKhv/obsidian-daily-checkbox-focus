@@ -9,11 +9,11 @@ It is intended for daily notes where the first empty top checkbox is the next pl
 - Detects daily notes by filename: `YYYY-MM-DD.md`.
 - Works no matter which folder contains the daily note, for example `Alfa/WRK/2026-05-19.md`.
 - On open, jumps once to the first truly empty checkbox line in the top capture area:
-  - `- [ ]`
-  - `* [ ]`
-  - `+ [ ]`
+  - `- [ ] `
+  - `* [ ] `
+  - `+ [ ] `
 - Inserts one missing empty checkbox in the top capture area when that setting is enabled.
-- Places the cursor at the end of the checkbox line.
+- Places the cursor after the checkbox marker and at least one following space.
 - Provides manual commands for the active Markdown file:
   - `Jump to first empty checkbox`
   - `Debug first empty checkbox`
@@ -70,7 +70,7 @@ You can also install a release manually:
 ## Troubleshooting
 
 - Confirm your daily note filename is exactly `YYYY-MM-DD.md`, such as `2026-05-19.md`.
-- Confirm the target checkbox is before the first Markdown heading and has no text after it. `- [ ]` works; `- [ ] something` is intentionally skipped.
+- Confirm the target checkbox is before the first Markdown heading and has no text after it. `- [ ] ` works; `- [ ] something` is intentionally skipped.
 - Confirm the checkbox is not inside a fenced code block and is not in a callout or blockquote line.
 - Check `Create missing top checkbox` if you expect the plugin to insert a missing top checkbox.
 - Run `Debug first empty checkbox` from the command palette to see the current file path, daily-note match status, top capture range, session state, detected target, and nearby top-capture lines containing `[ ]`.
@@ -94,4 +94,4 @@ Daily Checkbox Focus does not send data anywhere. It does not use network reques
 
 ## Releases
 
-Release tags should match the plugin version exactly. For version `1.1.0`, create and push the tag `1.1.0`.
+Release tags should match the plugin version exactly. For version `1.1.1`, create and push the tag `1.1.1`.

@@ -1,6 +1,6 @@
 {
   "name": "obsidian-daily-checkbox-focus",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "private": false,
   "description": "Focus or create the top capture checkbox when opening daily notes.",
   "main": "main.js",

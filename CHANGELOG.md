@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.1
+
+### Fixed
+
+- Created and focused checkboxes now keep a space after the checkbox marker, so typing starts after "- [ ] " instead of immediately after the closing bracket.
+
 ## 1.1.0
 
 ### Added
