@@ -99,4 +99,4 @@ Daily Checkbox Focus does not send data anywhere. It does not use network reques
 
 ## Releases
 
-Release tags should match the plugin version exactly. For version `1.2.0`, create and push the tag `1.2.0`.
+Release tags should match the plugin version exactly. For version `1.2.1`, create and push the tag `1.2.1`.

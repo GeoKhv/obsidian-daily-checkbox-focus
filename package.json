@@ -1,6 +1,6 @@
 {
   "name": "obsidian-daily-checkbox-focus",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": false,
   "description": "Focus or create the configured empty checkbox when opening daily notes.",
   "main": "main.js",

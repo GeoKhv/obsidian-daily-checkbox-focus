@@ -1,7 +1,7 @@
 {
   "id": "daily-checkbox-focus",
   "name": "Daily Checkbox Focus",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "minAppVersion": "1.0.0",
   "description": "Focus or create the configured empty checkbox when opening daily notes.",
   "author": "Geo",

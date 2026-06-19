@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.1
+
+### Fixed
+
+- Normalized saved plugin settings from `unknown` values before assigning them to typed settings, resolving the Obsidian community review warning for unsafe assignment.
+
+### Changed
+
+- Release workflow now generates release notes from `CHANGELOG.md`.
+- Release workflow now generates GitHub artifact attestations for release assets.
+
 ## 1.2.0
 
 ### Added

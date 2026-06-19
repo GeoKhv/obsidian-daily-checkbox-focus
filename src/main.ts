@@ -1,7 +1,7 @@
 import { App, Editor, MarkdownView, Notice, Plugin, PluginSettingTab, Setting, TFile } from "obsidian";
 
 const PLUGIN_NAME = "Daily Checkbox Focus";
-const PLUGIN_VERSION = "1.2.0";
+const PLUGIN_VERSION = "1.2.1";
 const CHECKBOX_SEARCH_SCOPE_TOP_CAPTURE = "top-capture";
 const CHECKBOX_SEARCH_SCOPE_ENTIRE_NOTE = "entire-note";
 const AUTO_JUMP_DELAYS_MS = [150, 400, 900, 1600];
@@ -26,6 +26,8 @@ const DEFAULT_SETTINGS: DailyCheckboxFocusSettings = {
   focusOnOpen: true,
   checkboxSearchScope: CHECKBOX_SEARCH_SCOPE_TOP_CAPTURE,
 };
+
+type SettingsRecord = Record<string, unknown>;
 
 interface FenceState {
   type: string;
@@ -526,14 +528,31 @@ export default class DailyCheckboxFocusPlugin extends Plugin {
     return CHECKBOX_SEARCH_SCOPE_TOP_CAPTURE;
   }
 
+  private normalizeBooleanSetting(value: unknown, fallback: boolean): boolean {
+    return typeof value === "boolean" ? value : fallback;
+  }
+
+  private isSettingsRecord(value: unknown): value is SettingsRecord {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+  }
+
   private formatNullableYesNo(value: boolean | null): string {
     if (value === null) return "none";
     return value ? "yes" : "no";
   }
 
   async loadSettings(): Promise<void> {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-    this.settings.checkboxSearchScope = this.normalizeCheckboxSearchScope(this.settings.checkboxSearchScope);
+    const savedSettings: unknown = await this.loadData();
+    const settingsRecord: SettingsRecord = this.isSettingsRecord(savedSettings) ? savedSettings : {};
+
+    this.settings = {
+      createMissingTopCheckbox: this.normalizeBooleanSetting(
+        settingsRecord.createMissingTopCheckbox,
+        DEFAULT_SETTINGS.createMissingTopCheckbox
+      ),
+      focusOnOpen: this.normalizeBooleanSetting(settingsRecord.focusOnOpen, DEFAULT_SETTINGS.focusOnOpen),
+      checkboxSearchScope: this.normalizeCheckboxSearchScope(settingsRecord.checkboxSearchScope),
+    };
   }
 
   async saveSettings(): Promise<void> {
