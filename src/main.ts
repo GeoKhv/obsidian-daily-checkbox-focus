@@ -1,7 +1,9 @@
 import { App, Editor, MarkdownView, Notice, Plugin, PluginSettingTab, Setting, TFile } from "obsidian";
 
 const PLUGIN_NAME = "Daily Checkbox Focus";
-const PLUGIN_VERSION = "1.1.1";
+const PLUGIN_VERSION = "1.2.0";
+const CHECKBOX_SEARCH_SCOPE_TOP_CAPTURE = "top-capture";
+const CHECKBOX_SEARCH_SCOPE_ENTIRE_NOTE = "entire-note";
 const AUTO_JUMP_DELAYS_MS = [150, 400, 900, 1600];
 const EMPTY_CHECKBOX_RE = /^(\s*[-*+]\s+\[[ \t]\])([ \t]*)$/;
 const FENCE_RE = /^\s{0,3}(```+|~~~+)/;
@@ -14,11 +16,15 @@ const TOP_CAPTURE_CHECKBOX_TEXT = "- [ ] ";
 interface DailyCheckboxFocusSettings {
   createMissingTopCheckbox: boolean;
   focusOnOpen: boolean;
+  checkboxSearchScope: CheckboxSearchScope;
 }
+
+type CheckboxSearchScope = typeof CHECKBOX_SEARCH_SCOPE_TOP_CAPTURE | typeof CHECKBOX_SEARCH_SCOPE_ENTIRE_NOTE;
 
 const DEFAULT_SETTINGS: DailyCheckboxFocusSettings = {
   createMissingTopCheckbox: true,
   focusOnOpen: true,
+  checkboxSearchScope: CHECKBOX_SEARCH_SCOPE_TOP_CAPTURE,
 };
 
 interface FenceState {
@@ -31,7 +37,7 @@ interface CheckboxTarget {
   ch: number;
 }
 
-interface TopCaptureArea {
+interface CheckboxSearchArea {
   startLine: number;
   endLine: number;
 }
@@ -101,13 +107,13 @@ export default class DailyCheckboxFocusPlugin extends Plugin {
 
     this.addCommand({
       id: "jump-to-first-empty-checkbox",
-      name: "Jump to first empty checkbox",
+      name: "Jump to configured empty checkbox",
       callback: () => this.jumpToFirstEmptyCheckbox({ manual: true, showNotice: true }),
     });
 
     this.addCommand({
       id: "debug-first-empty-checkbox",
-      name: "Debug first empty checkbox",
+      name: "Show configured checkbox target",
       callback: () => this.debugFirstEmptyCheckbox(),
     });
   }
@@ -233,12 +239,12 @@ export default class DailyCheckboxFocusPlugin extends Plugin {
       return false;
     }
 
-    const result = this.focusOrCreateTopCheckbox(view.editor, view.file.path);
+    const result = this.focusOrCreateConfiguredCheckbox(view.editor, view.file.path);
 
     if (!result) {
       this.lastFocusResultFilePath = view.file.path;
       this.lastFocusSpacingNormalized = null;
-      if (showNotice) new Notice(`${PLUGIN_NAME}: top capture checkbox not found`);
+      if (showNotice) new Notice(`${PLUGIN_NAME}: checkbox target not found`);
       return false;
     }
 
@@ -264,9 +270,9 @@ export default class DailyCheckboxFocusPlugin extends Plugin {
     return true;
   }
 
-  private focusOrCreateTopCheckbox(editor: Editor, filePath: string): FocusResult | null {
-    const area = this.getTopCaptureArea(editor);
-    const existingTarget = this.findFirstEmptyCheckboxInTopCaptureArea(editor, area);
+  private focusOrCreateConfiguredCheckbox(editor: Editor, filePath: string): FocusResult | null {
+    const area = this.getConfiguredCheckboxSearchArea(editor);
+    const existingTarget = this.findFirstEmptyCheckboxInSearchArea(editor, area);
 
     if (existingTarget) {
       if (existingTarget.needsSpacingNormalization) {
@@ -290,11 +296,22 @@ export default class DailyCheckboxFocusPlugin extends Plugin {
       return null;
     }
 
-    const createdTarget = this.insertTopCaptureCheckbox(editor, area, filePath);
+    const createdTarget = this.insertTopCaptureCheckbox(editor, this.getTopCaptureArea(editor), filePath);
     return { target: createdTarget, created: true, spacingNormalized: false };
   }
 
-  private getTopCaptureArea(editor: Editor): TopCaptureArea {
+  private getConfiguredCheckboxSearchArea(editor: Editor): CheckboxSearchArea {
+    if (this.settings.checkboxSearchScope === CHECKBOX_SEARCH_SCOPE_ENTIRE_NOTE) {
+      return {
+        startLine: this.getTopCaptureStartLine(editor),
+        endLine: editor.lineCount(),
+      };
+    }
+
+    return this.getTopCaptureArea(editor);
+  }
+
+  private getTopCaptureArea(editor: Editor): CheckboxSearchArea {
     const startLine = this.getTopCaptureStartLine(editor);
     const endLine = this.getFirstMarkdownHeadingLine(editor, startLine) ?? editor.lineCount();
     return { startLine, endLine };
@@ -328,7 +345,7 @@ export default class DailyCheckboxFocusPlugin extends Plugin {
     return null;
   }
 
-  private findFirstEmptyCheckboxInTopCaptureArea(editor: Editor, area: TopCaptureArea): ExistingCheckboxTarget | null {
+  private findFirstEmptyCheckboxInSearchArea(editor: Editor, area: CheckboxSearchArea): ExistingCheckboxTarget | null {
     for (const { line, text } of this.iterSearchableTopLines(editor, area.startLine, area.endLine)) {
       const checkboxMatch = text.match(EMPTY_CHECKBOX_RE);
 
@@ -345,7 +362,7 @@ export default class DailyCheckboxFocusPlugin extends Plugin {
     return null;
   }
 
-  private insertTopCaptureCheckbox(editor: Editor, area: TopCaptureArea, filePath: string): CheckboxTarget {
+  private insertTopCaptureCheckbox(editor: Editor, area: CheckboxSearchArea, filePath: string): CheckboxTarget {
     const checkboxText = TOP_CAPTURE_CHECKBOX_TEXT;
     const hasHeading = area.endLine < editor.lineCount();
     let insertAt = this.getDocumentEndPosition(editor);
@@ -399,7 +416,7 @@ export default class DailyCheckboxFocusPlugin extends Plugin {
     return currentFence;
   }
 
-  private debugFirstEmptyCheckbox(): void {
+  debugFirstEmptyCheckbox(): void {
     const view = this.getActiveMarkdownView();
 
     if (!view?.file || !view.editor) {
@@ -407,10 +424,10 @@ export default class DailyCheckboxFocusPlugin extends Plugin {
       return;
     }
 
-    const area = this.getTopCaptureArea(view.editor);
-    const result = this.findFirstEmptyCheckboxInTopCaptureArea(view.editor, area);
+    const area = this.getConfiguredCheckboxSearchArea(view.editor);
+    const result = this.findFirstEmptyCheckboxInSearchArea(view.editor, area);
     const target = result?.target ?? null;
-    const firstCheckboxLines = this.getFirstCheckboxLinesInTopCaptureArea(view.editor, area);
+    const firstCheckboxLines = this.getFirstCheckboxLinesInSearchArea(view.editor, area);
     const dailyFileMatch = this.isDailyFilePath(view.file.path);
     const wouldCreate = !target && this.settings.createMissingTopCheckbox;
     const wouldNormalizeSpacing = result?.needsSpacingNormalization ?? false;
@@ -422,16 +439,17 @@ export default class DailyCheckboxFocusPlugin extends Plugin {
       `${PLUGIN_NAME} v${PLUGIN_VERSION}`,
       `file: ${view.file.path}`,
       `daily file match: ${dailyFileMatch ? "yes" : "no"}`,
-      `top capture area start/end lines: ${this.formatTopCaptureArea(area)}`,
+      `checkbox search scope: ${this.formatCheckboxSearchScope()}`,
+      `search area start/end lines: ${this.formatSearchArea(area)}`,
       `empty checkbox found: ${target ? "yes" : "no"}`,
       `target: ${target ? `line ${target.line + 1}, ch ${target.ch}` : "not found"}`,
       `checkbox spacing would be normalized on focus: ${wouldNormalizeSpacing ? "yes" : "no"}`,
       `last focus normalized checkbox spacing: ${this.formatNullableYesNo(lastFocusSpacingNormalized)}`,
-      `would create checkbox: ${wouldCreate ? "yes" : "no"}`,
+      `would create checkbox before first heading: ${wouldCreate ? "yes" : "no"}`,
       `open session id: ${this.currentSessionId}`,
       `auto-jump already happened: ${this.autoJumpDoneForSession ? "yes" : "no"}`,
       `user edit detected after open: ${this.userEditedSinceOpen ? "yes" : "no"}`,
-      `first [ ] lines in top capture area: ${firstCheckboxLines.length ? firstCheckboxLines.join(" | ") : "none"}`,
+      `first [ ] lines in search area: ${firstCheckboxLines.length ? firstCheckboxLines.join(" | ") : "none"}`,
     ].join("\n");
 
     new Notice(message, 12000);
@@ -439,20 +457,21 @@ export default class DailyCheckboxFocusPlugin extends Plugin {
       version: PLUGIN_VERSION,
       currentFilePath: view.file.path,
       dailyFileMatch,
-      topCaptureArea: area,
+      checkboxSearchScope: this.settings.checkboxSearchScope,
+      searchArea: area,
       emptyCheckboxFound: Boolean(target),
       target: target ?? null,
       checkboxSpacingWouldBeNormalizedOnFocus: wouldNormalizeSpacing,
       lastFocusNormalizedCheckboxSpacing: lastFocusSpacingNormalized,
-      wouldCreateCheckboxWithCurrentSettings: wouldCreate,
+      wouldCreateCheckboxBeforeFirstHeadingWithCurrentSettings: wouldCreate,
       currentSessionId: this.currentSessionId,
       autoJumpDoneForSession: this.autoJumpDoneForSession,
       userEditedSinceOpen: this.userEditedSinceOpen,
-      firstLinesContainingCheckboxInTopCaptureArea: firstCheckboxLines,
+      firstLinesContainingCheckboxInSearchArea: firstCheckboxLines,
     });
   }
 
-  private getFirstCheckboxLinesInTopCaptureArea(editor: Editor, area: TopCaptureArea): string[] {
+  private getFirstCheckboxLinesInSearchArea(editor: Editor, area: CheckboxSearchArea): string[] {
     const lines: string[] = [];
 
     for (const { line, text } of this.iterSearchableTopLines(editor, area.startLine, area.endLine)) {
@@ -483,12 +502,28 @@ export default class DailyCheckboxFocusPlugin extends Plugin {
     }
   }
 
-  private formatTopCaptureArea(area: TopCaptureArea): string {
+  private formatSearchArea(area: CheckboxSearchArea): string {
     if (area.startLine >= area.endLine) {
       return `empty, start ${area.startLine + 1}, end before ${area.endLine + 1}`;
     }
 
     return `${area.startLine + 1}-${area.endLine}`;
+  }
+
+  private formatCheckboxSearchScope(): string {
+    if (this.settings.checkboxSearchScope === CHECKBOX_SEARCH_SCOPE_ENTIRE_NOTE) {
+      return "first empty checkbox on page";
+    }
+
+    return "before first heading";
+  }
+
+  normalizeCheckboxSearchScope(value: unknown): CheckboxSearchScope {
+    if (value === CHECKBOX_SEARCH_SCOPE_ENTIRE_NOTE) {
+      return CHECKBOX_SEARCH_SCOPE_ENTIRE_NOTE;
+    }
+
+    return CHECKBOX_SEARCH_SCOPE_TOP_CAPTURE;
   }
 
   private formatNullableYesNo(value: boolean | null): string {
@@ -498,6 +533,7 @@ export default class DailyCheckboxFocusPlugin extends Plugin {
 
   async loadSettings(): Promise<void> {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    this.settings.checkboxSearchScope = this.normalizeCheckboxSearchScope(this.settings.checkboxSearchScope);
   }
 
   async saveSettings(): Promise<void> {
@@ -518,8 +554,22 @@ class DailyCheckboxFocusSettingTab extends PluginSettingTab {
     containerEl.empty();
 
     new Setting(containerEl)
-      .setName("Create missing top checkbox")
-      .setDesc("If no empty checkbox exists before the first heading, insert one in the top capture area.")
+      .setName("Checkbox search")
+      .setDesc("Choose whether to use the first empty checkbox before the first heading or the first empty checkbox in the note.")
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption(CHECKBOX_SEARCH_SCOPE_TOP_CAPTURE, "Before first heading")
+          .addOption(CHECKBOX_SEARCH_SCOPE_ENTIRE_NOTE, "First on page")
+          .setValue(this.plugin.settings.checkboxSearchScope)
+          .onChange(async (value) => {
+            this.plugin.settings.checkboxSearchScope = this.plugin.normalizeCheckboxSearchScope(value);
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Create missing checkbox")
+      .setDesc("If no matching empty checkbox exists, insert one before the first heading.")
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.createMissingTopCheckbox).onChange(async (value) => {
           this.plugin.settings.createMissingTopCheckbox = value;
@@ -529,12 +579,17 @@ class DailyCheckboxFocusSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Focus on open")
-      .setDesc("Automatically focus the top capture checkbox when opening daily notes.")
+      .setDesc("Automatically focus the configured checkbox when opening daily notes.")
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.focusOnOpen).onChange(async (value) => {
           this.plugin.settings.focusOnOpen = value;
           await this.plugin.saveSettings();
         })
       );
+
+    new Setting(containerEl)
+      .setName("Current target")
+      .setDesc("Show which checkbox would be focused in the current note.")
+      .addButton((button) => button.setButtonText("Show").onClick(() => this.plugin.debugFirstEmptyCheckbox()));
   }
 }

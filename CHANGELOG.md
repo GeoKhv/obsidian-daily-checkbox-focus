@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.2.0
+
+### Added
+
+- Added a `Checkbox search` setting:
+  - `Before first heading` keeps the previous top capture behavior.
+  - `First on page` focuses the first empty checkbox after optional frontmatter anywhere in the note.
+- Added a `Current target` button in settings to show which checkbox would be focused in the current note.
+
+### Changed
+
+- Updated debug output and command names to describe the configured checkbox target.
+
 ## 1.1.1
 
 ### Fixed
